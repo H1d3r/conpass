@@ -236,7 +236,7 @@ class ThreadPool:
                 username=self.__username,
                 password=self.__password,
                 use_ssl=self.__use_ssl,
-                page_size=200,
+                page_size=1000,
                 timeout=self.__timeout,
                 console=self.__console
             )
@@ -260,7 +260,7 @@ class ThreadPool:
                     username=self.__username,
                     password=self.__password,
                     use_ssl=self.__use_ssl,
-                    page_size=200,
+                    page_size=1000,
                     timeout=self.__timeout,
                     console=self.__console
                 ),

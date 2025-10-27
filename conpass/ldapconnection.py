@@ -10,7 +10,7 @@ from conpass.user import User
 
 
 class LdapConnection:
-    def __init__(self, dc_ip, base_dn, domain, username=None, password=None, use_ssl=False, page_size=200, timeout=3, console=None):
+    def __init__(self, dc_ip, base_dn, domain, username=None, password=None, use_ssl=False, page_size=1000, timeout=3, console=None):
         self.__dc_ip = dc_ip
         self.__all_dc_ips = []
         self.__base_dn = base_dn
@@ -159,7 +159,7 @@ class LdapConnection:
     def can_read_pso(self):
         return self.__can_read_psos
 
-    def search_users(self, search_filter, attributes, page_size=100, custom_processing=None):
+    def search_users(self, search_filter, attributes, custom_processing=None):
         search_base = self.__base_dn
         cookie = None
         entries = []
@@ -170,7 +170,7 @@ class LdapConnection:
                         search_base,
                         search_filter,
                         attributes=attributes,
-                        paged_size=page_size,
+                        paged_size=self.__page_size,
                         paged_cookie=cookie
                     )
                     
@@ -207,7 +207,7 @@ class LdapConnection:
                                                                                                      tzinfo=timezone.utc)
             )
 
-        results = self.search_users(search_filter, attributes, page_size=100, custom_processing=process_entry)
+        results = self.search_users(search_filter, attributes, custom_processing=process_entry)
         return results[0] if results else None
 
     def get_active_users(self, psos, domain_policy, time_delta, security_threshold, file_users):
@@ -274,7 +274,7 @@ class LdapConnection:
                 dn=entry.distinguishedName.value,
                 bad_password_time=entry.badPasswordTime.value if entry.badPasswordTime.value is not None else datetime(
                     1970, 1, 1, tzinfo=timezone.utc),
-                bad_password_count=entry.badPwdCount.value,
+                bad_password_count=entry.badPwdCount.value if entry.badPwdCount.value is not None else 0,
                 lockout_window=lockout_window,
                 lockout_threshold=lockout_threshold,
                 pso=pso,
@@ -283,7 +283,7 @@ class LdapConnection:
                 console=self.__console
             )
 
-        results = self.search_users(search_filter, attributes, page_size=1000, custom_processing=process_entry)
+        results = self.search_users(search_filter, attributes, custom_processing=process_entry)
         return [user for user in results if user]
 
     def get_pso(self, name, psos):
