@@ -49,7 +49,7 @@ class SprayOrchestrator:
         self.psos: list[PasswordPolicy] = []
 
         # Threading
-        self.work_queue: queue.Queue = queue.Queue(maxsize=1000 if config.limit_memory else 0)
+        self.work_queue: queue.Queue = queue.Queue(maxsize=100 if config.limit_memory else 0)
         self.workers: list[Worker] = []
         self.stop_event = threading.Event()
         self.lockout_event = threading.Event()

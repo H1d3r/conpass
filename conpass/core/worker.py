@@ -198,8 +198,8 @@ class Worker(threading.Thread):
                 if user_status == UserStatus.ACCOUNT_RESTRICTED:
                     # Account has restrictions - likely in Protected Users group
                     self.console.print(
-                        f"[white]⚠️  Worker {self.worker_id}: Account {user.samaccountname} has restrictions "
-                        f"(likely Protected Users) - DISCARDING from further tests[/white]"
+                        f"[bright_black]Account {user.samaccountname} has restrictions "
+                        f"(likely Protected Users) - DISCARDING from further tests[/bright_black]"
                     )
                 elif user_status == UserStatus.LOCKED_OUT:
                     # This will raise UserLockedOutError

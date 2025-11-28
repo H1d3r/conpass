@@ -68,7 +68,7 @@ class AuthStatus(Enum):
     @property
     def is_success(self) -> bool:
         """Check if this status represents successful authentication."""
-        return self in (AuthStatus.SUCCESS, AuthStatus.PASSWORD_EXPIRED, AuthStatus.PASSWORD_MUST_CHANGE)
+        return self in (AuthStatus.SUCCESS, AuthStatus.PASSWORD_EXPIRED, AuthStatus.PASSWORD_MUST_CHANGE, AuthStatus.ACCOUNT_EXPIRED)
 
     @property
     def is_lockout(self) -> bool:
