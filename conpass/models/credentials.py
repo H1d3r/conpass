@@ -9,16 +9,9 @@ class Credentials:
 
     username: str
     domain: str
-    password: str | None = None
-    nt_hash: str | None = None
-    aes_key: str | None = None
+    password: str
 
     @property
     def user_principal(self) -> str:
         """Get user principal name for LDAP binding."""
         return f"{self.domain}\\{self.username}"
-
-    def __post_init__(self):
-        """Validate credentials."""
-        if not any([self.password, self.nt_hash, self.aes_key]):
-            raise ValueError("At least one authentication method must be provided")

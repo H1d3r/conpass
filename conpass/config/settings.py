@@ -14,7 +14,6 @@ class SprayConfig:
 
     # Authentication
     use_ssl: bool = False
-    use_kerberos: bool = False
 
     # Files
     password_file: Path | None = None
