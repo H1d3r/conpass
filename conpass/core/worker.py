@@ -43,6 +43,7 @@ class Worker(threading.Thread):
         stop_event: threading.Event,
         lockout_event: threading.Event,
         completed_count_ref: tuple = None,
+        connected_workers_ref: tuple = None,
         debug: bool = False
     ):
         super().__init__(daemon=True)
@@ -62,6 +63,12 @@ class Worker(threading.Thread):
         else:
             self.orchestrator = None
 
+        # Connection tracking
+        if connected_workers_ref:
+            self.conn_orchestrator, self.conn_count_attr, self.conn_lock_attr = connected_workers_ref
+        else:
+            self.conn_orchestrator = None
+
     def run(self) -> None:
         """Main worker loop - process work items from queue."""
         # Connect services
@@ -72,6 +79,13 @@ class Worker(threading.Thread):
         except Exception as e:
             self.console.print(f"[red]Worker {self.worker_id} failed to connect: {e}[/red]")
             return
+
+        # Increment connected workers counter
+        if self.conn_orchestrator:
+            lock = getattr(self.conn_orchestrator, self.conn_lock_attr)
+            with lock:
+                current = getattr(self.conn_orchestrator, self.conn_count_attr)
+                setattr(self.conn_orchestrator, self.conn_count_attr, current + 1)
 
         # Process work items
         while not self.stop_event.is_set() and not self.lockout_event.is_set():

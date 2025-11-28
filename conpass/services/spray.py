@@ -57,6 +57,8 @@ class SprayOrchestrator:
         # Progress tracking
         self.completed_count = 0
         self.completed_lock = threading.Lock()
+        self.connected_workers = 0
+        self.connected_workers_lock = threading.Lock()
 
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -256,6 +258,9 @@ class SprayOrchestrator:
         # Start workers
         self._start_workers()
 
+        # Wait for all workers to connect
+        self._wait_for_workers_connection()
+
         # Feed work queue with passwords
         self._feed_work_queue()
 
@@ -301,11 +306,40 @@ class SprayOrchestrator:
                 stop_event=self.stop_event,
                 lockout_event=self.lockout_event,
                 completed_count_ref=(self, 'completed_count', 'completed_lock'),
+                connected_workers_ref=(self, 'connected_workers', 'connected_workers_lock'),
                 debug=self.config.debug
             )
 
             worker.start()
             self.workers.append(worker)
+
+    def _wait_for_workers_connection(self) -> None:
+        """Wait for all workers to connect with a progress bar."""
+        from rich.progress import Progress, BarColumn, MofNCompleteColumn, TextColumn
+
+        total_workers = len(self.workers)
+
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            console=self.console,
+            transient=True
+        ) as progress:
+            task = progress.add_task("Connecting workers...", total=total_workers)
+
+            while True:
+                with self.connected_workers_lock:
+                    connected = self.connected_workers
+
+                progress.update(task, completed=connected)
+
+                if connected >= total_workers:
+                    break
+
+                time.sleep(0.1)
+
+        self.console.print(f"[green]✓ All {total_workers} workers connected")
 
     def _feed_work_queue(self) -> None:
         """Read passwords from file and feed work queue, monitoring for new passwords."""
