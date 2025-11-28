@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "conpass"
-version = "0.2.1"
-description = "Continuous password spraying tool"
+version = "0.3.0"
+description = "Continuous password spraying tool with thread-safe anti-lockout protection"
 authors = ["pixis <romain.bentz@login-securite.com>"]
 license = "MIT"
 readme = "README.md"
@@ -24,7 +24,7 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
-conpass = "conpass.console:app"
+conpass = "conpass.cli:app"
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -39,7 +39,6 @@ ignore = [
   "TCH003",
   "PTH123",
   "PLR1722",
-
 
   "ANN",        # Annotations
   "D",          # Docstrings

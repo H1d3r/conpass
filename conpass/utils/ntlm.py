@@ -49,7 +49,7 @@ from impacket.smb import (
 )
 from impacket.smb3structs import *
 
-from conpass import utils
+from conpass.utils import time as time_utils
 
 
 class SMB1:
@@ -232,12 +232,6 @@ class SmbConnection:
                                        self._timeout, session=self._nmbSession, negSessionResponse=packet)
         return self._SMBConnection.GetNegotiateResponse()
 
-    def GetChallange(self):
-        return self._SMBConnection.GetChallange()
-
-    def Authenticate(self):
-        return self._SMBConnection.Authenticate()
-
     def _negotiateSessionWildcard(self, extended_security=True, flags1=0, flags2=0, data=None):
         tries = 0
         smbp = NewSMBPacket()
@@ -286,5 +280,5 @@ class NtlmInfo:
 
 
     def get_server_time(self):
-        return 0 if self._negotiateResponse['SystemTime'] == 0 else utils.win_timestamp_to_datetime(
+        return 0 if self._negotiateResponse['SystemTime'] == 0 else time_utils.win_timestamp_to_datetime(
             self._negotiateResponse['SystemTime'])

@@ -1,3 +1,3 @@
-from conpass.core import ThreadPool
+"""ConPass - Continuous password spraying tool for Active Directory."""
 
-__all__ = ["ThreadPool"]
+__version__ = "0.3.0"

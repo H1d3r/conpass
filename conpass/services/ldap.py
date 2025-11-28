@@ -1,0 +1,293 @@
+import socket
+import ssl
+from datetime import datetime, timezone
+
+from ldap3 import ALL, NTLM, Connection, Server, SUBTREE, Tls, TLS_CHANNEL_BINDING
+from ldap3.core.exceptions import LDAPBindError
+from rich.console import Console
+
+from conpass.exceptions import LdapConnectionError
+from conpass.models import Credentials, PasswordPolicy
+
+
+class LdapService:
+    """Service for LDAP operations (connection, queries, policy retrieval)."""
+
+    def __init__(
+        self,
+        credentials: Credentials,
+        base_dn: str,
+        dc_ip: str,
+        use_ssl: bool = False,
+        page_size: int = 1000,
+        timeout: int = 3,
+        console: Console | None = None
+    ):
+        self.credentials = credentials
+        self.base_dn = base_dn
+        self.dc_ip = dc_ip
+        self.use_ssl = use_ssl
+        self.page_size = page_size
+        self.timeout = timeout
+        self.console = console
+
+        self._connections: list[Connection] = []
+        self._all_dc_ips: list[str] = []
+        self._can_read_psos = False
+
+    def connect(self) -> None:
+        """
+        Connect to all domain controllers.
+
+        Raises:
+            LdapConnectionError: If unable to connect to any DC
+        """
+        if not self._all_dc_ips:
+            self._discover_domain_controllers()
+
+        for dc_ip in self._all_dc_ips:
+            conn = self._create_connection(dc_ip)
+            self._connections.append(conn)
+
+        # Check if we have at least one successful connection
+        if not any(self._connections):
+            raise LdapConnectionError("Could not connect to any domain controller")
+
+        # Filter out failed connections
+        if not all(self._connections):
+            failed_dcs = [
+                dc_ip for dc_ip, conn in zip(self._all_dc_ips, self._connections) if not conn
+            ]
+            if self.console:
+                self.console.print(
+                    f"[yellow]Could not bind to all Domain Controllers (Failed for {', '.join(failed_dcs)})[/yellow]"
+                )
+            self._all_dc_ips = [dc_ip for dc_ip, conn in zip(self._all_dc_ips, self._connections) if conn]
+            self._connections = [conn for conn in self._connections if conn]
+
+    def _create_ldap_server(self, dc_ip: str, use_ssl: bool) -> Server:
+        """Create an LDAP server object."""
+        if use_ssl:
+            tls = Tls(validate=ssl.CERT_NONE)
+            return Server(dc_ip, use_ssl=True, tls=tls, get_info=ALL, connect_timeout=self.timeout)
+        return Server(dc_ip, get_info=ALL, connect_timeout=self.timeout)
+
+    def _create_connection(self, dc_ip: str) -> Connection | None:
+        """
+        Create a connection to a domain controller.
+
+        First tries with SSL and channel binding, falls back to no SSL if needed.
+
+        Returns:
+            Connection object if successful, None otherwise
+        """
+        try:
+            # Try with SSL and channel binding first
+            try:
+                server = self._create_ldap_server(dc_ip, True)
+                conn = Connection(
+                    server,
+                    user=self.credentials.user_principal,
+                    password=self.credentials.password,
+                    authentication=NTLM,
+                    auto_referrals=False,
+                    channel_binding=TLS_CHANNEL_BINDING,
+                )
+                if not conn.bind():
+                    raise LDAPBindError("Channel binding failed")
+                return conn
+            except (ssl.SSLError, socket.error, LDAPBindError):
+                # Fall back to non-SSL
+                server = self._create_ldap_server(dc_ip, False)
+                conn = Connection(
+                    server,
+                    user=self.credentials.user_principal,
+                    password=self.credentials.password,
+                    authentication=NTLM
+                )
+                if conn.bind():
+                    return conn
+                return None
+        except Exception:
+            return None
+
+    def _discover_domain_controllers(self) -> None:
+        """Discover all domain controllers via LDAP query."""
+        conn = self._create_connection(self.dc_ip)
+        if not conn:
+            raise LdapConnectionError(f"Could not connect to {self.dc_ip}")
+
+        search_filter = "(userAccountControl:1.2.840.113556.1.4.803:=8192)"
+        attributes = ['dNSHostName']
+
+        conn.search(
+            search_base=self.base_dn,
+            search_filter=search_filter,
+            search_scope=SUBTREE,
+            attributes=attributes
+        )
+
+        for entry in conn.entries:
+            dns_name = entry.dNSHostName.value
+            if dns_name:
+                try:
+                    ip_address = socket.gethostbyname(dns_name)
+                    self._all_dc_ips.append(ip_address)
+                except socket.gaierror:
+                    pass
+
+        if not self._all_dc_ips:
+            raise LdapConnectionError("No domain controllers found")
+
+    def get_dc_ips(self) -> list[str]:
+        """Get list of all domain controller IPs."""
+        return self._all_dc_ips
+
+    def get_default_domain_policy(self) -> PasswordPolicy:
+        """
+        Retrieve the default domain password policy.
+
+        Returns:
+            PasswordPolicy object with default domain policy
+        """
+        conn = self._connections[0]
+        search_filter = "(objectClass=domain)"
+        attributes = ['lockoutThreshold', 'lockoutDuration', 'lockOutObservationWindow']
+
+        conn.search(self.base_dn, search_filter, attributes=attributes)
+        entry = conn.entries[0]
+
+        lockout_threshold = entry.lockoutThreshold.value if entry.lockoutThreshold else 0
+
+        # lockOutObservationWindow is already a timedelta
+        if entry.lockOutObservationWindow:
+            lockout_window = int(abs(entry.lockOutObservationWindow.value.total_seconds()))
+        else:
+            lockout_window = 0
+
+        return PasswordPolicy(
+            name='Default Domain Policy',
+            lockout_threshold=lockout_threshold,
+            lockout_window_seconds=lockout_window
+        )
+
+    def get_password_setting_objects(self) -> list[PasswordPolicy]:
+        """
+        Retrieve all Password Settings Objects (PSOs).
+
+        Returns:
+            List of PasswordPolicy objects for each PSO
+        """
+        conn = self._connections[0]
+        pso_base_dn = f"CN=Password Settings Container,CN=System,{self.base_dn}"
+        pso_filter = "(objectClass=msDS-PasswordSettings)"
+        pso_attributes = ['name', 'msDS-LockoutThreshold', 'msDS-LockoutObservationWindow']
+
+        try:
+            if not conn.search(pso_base_dn, pso_filter, attributes=pso_attributes):
+                return []
+        except Exception:
+            return []
+
+        self._can_read_psos = True
+
+        if len(conn.entries) == 0:
+            if self.console:
+                self.console.print("[yellow]No PSO found[/yellow]")
+            return []
+
+        psos = []
+        for entry in conn.entries:
+            lockout_threshold = entry['msDS-LockoutThreshold'].value if entry['msDS-LockoutThreshold'] else 0
+
+            # msDS-LockoutObservationWindow is a FILETIME (int), not timedelta
+            if entry['msDS-LockoutObservationWindow']:
+                lockout_window = int(-(entry['msDS-LockoutObservationWindow'].value / 10000000))
+            else:
+                lockout_window = 0
+
+            psos.append(PasswordPolicy(
+                name=entry.name.value if entry.name else "Unknown",
+                lockout_threshold=lockout_threshold,
+                lockout_window_seconds=lockout_window,
+            ))
+
+        return psos
+
+    def can_read_pso(self) -> bool:
+        """Check if we have permission to read PSO details."""
+        return self._can_read_psos
+
+    def search_users(self, search_filter: str, attributes: list[str]) -> list:
+        """
+        Search for users across all domain controllers and return entries with max badPwdCount.
+
+        Args:
+            search_filter: LDAP search filter
+            attributes: List of attributes to retrieve
+
+        Returns:
+            List of LDAP entries (with max badPwdCount from all DCs)
+        """
+        entries = []
+        cookie = None
+
+        for conn in self._connections:
+            cookie = None
+            while True:
+                conn.search(
+                    self.base_dn,
+                    search_filter,
+                    attributes=attributes,
+                    paged_size=self.page_size,
+                    paged_cookie=cookie
+                )
+
+                for entry in conn.entries:
+                    # Find if user already exists in results
+                    existing_index = None
+                    for idx, ex_entry in enumerate(entries):
+                        if ex_entry.samAccountName == entry.samAccountName:
+                            existing_index = idx
+                            break
+
+                    if existing_index is not None:
+                        # Update if this DC has higher badPwdCount
+                        ex_entry = entries[existing_index]
+                        if (ex_entry.badPwdCount.value is None or
+                            (entry.badPwdCount.value is not None and
+                             ex_entry.badPwdCount.value < entry.badPwdCount.value)):
+                            entries[existing_index] = entry
+                    else:
+                        entries.append(entry)
+
+                cookie = conn.result['controls']['1.2.840.113556.1.4.319']['value']['cookie']
+                if not cookie:
+                    break
+
+        return entries
+
+    def get_user_password_status(self, samaccountname: str) -> tuple[int, datetime]:
+        """
+        Get user's bad password count and time from all DCs (returns max).
+
+        Args:
+            samaccountname: User's SAM account name
+
+        Returns:
+            Tuple of (bad_password_count, bad_password_time)
+        """
+        search_filter = f"(&(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2))(sAMAccountName={samaccountname}))"
+        attributes = ['samAccountName', 'badPwdCount', 'badPasswordTime']
+
+        entries = self.search_users(search_filter, attributes)
+
+        if not entries:
+            return (0, datetime(1970, 1, 1, tzinfo=timezone.utc))
+
+        entry = entries[0]
+        bad_password_count = entry.badPwdCount.value if entry.badPwdCount.value is not None else 0
+        bad_password_time = entry.badPasswordTime.value if entry.badPasswordTime.value else datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+        return (bad_password_count, bad_password_time)
+
