@@ -232,41 +232,93 @@ class LdapService:
         Returns:
             List of LDAP entries (with max badPwdCount from all DCs)
         """
+        from rich.progress import Progress, SpinnerColumn, TextColumn
+
         entries = []
         cookie = None
 
-        for conn in self._connections:
-            cookie = None
-            while True:
-                conn.search(
-                    self.base_dn,
-                    search_filter,
-                    attributes=attributes,
-                    paged_size=self.page_size,
-                    paged_cookie=cookie
-                )
+        # Use spinner to show progress if console available
+        if self.console:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=self.console,
+                transient=True
+            ) as progress:
+                task = progress.add_task("Loading users from LDAP...", total=None)
 
-                for entry in conn.entries:
-                    # Find if user already exists in results
-                    existing_index = None
-                    for idx, ex_entry in enumerate(entries):
-                        if ex_entry.samAccountName == entry.samAccountName:
-                            existing_index = idx
+                for conn in self._connections:
+                    cookie = None
+                    while True:
+                        conn.search(
+                            self.base_dn,
+                            search_filter,
+                            attributes=attributes,
+                            paged_size=self.page_size,
+                            paged_cookie=cookie
+                        )
+
+                        for entry in conn.entries:
+                            # Find if user already exists in results
+                            existing_index = None
+                            for idx, ex_entry in enumerate(entries):
+                                if ex_entry.samAccountName == entry.samAccountName:
+                                    existing_index = idx
+                                    break
+
+                            if existing_index is not None:
+                                # Update if this DC has higher badPwdCount
+                                ex_entry = entries[existing_index]
+                                if (ex_entry.badPwdCount.value is None or
+                                    (entry.badPwdCount.value is not None and
+                                     ex_entry.badPwdCount.value < entry.badPwdCount.value)):
+                                    entries[existing_index] = entry
+                            else:
+                                entries.append(entry)
+
+                        # Update progress
+                        progress.update(task, description=f"Loading users from LDAP... {len(entries)} loaded")
+
+                        cookie = conn.result['controls']['1.2.840.113556.1.4.319']['value']['cookie']
+                        if not cookie:
                             break
 
-                    if existing_index is not None:
-                        # Update if this DC has higher badPwdCount
-                        ex_entry = entries[existing_index]
-                        if (ex_entry.badPwdCount.value is None or
-                            (entry.badPwdCount.value is not None and
-                             ex_entry.badPwdCount.value < entry.badPwdCount.value)):
-                            entries[existing_index] = entry
-                    else:
-                        entries.append(entry)
+            # Display final message after spinner disappears
+            self.console.print(f"[green]✓ Loaded {len(entries)} users from LDAP")
+        else:
+            # No console - load without progress display
+            for conn in self._connections:
+                cookie = None
+                while True:
+                    conn.search(
+                        self.base_dn,
+                        search_filter,
+                        attributes=attributes,
+                        paged_size=self.page_size,
+                        paged_cookie=cookie
+                    )
 
-                cookie = conn.result['controls']['1.2.840.113556.1.4.319']['value']['cookie']
-                if not cookie:
-                    break
+                    for entry in conn.entries:
+                        # Find if user already exists in results
+                        existing_index = None
+                        for idx, ex_entry in enumerate(entries):
+                            if ex_entry.samAccountName == entry.samAccountName:
+                                existing_index = idx
+                                break
+
+                        if existing_index is not None:
+                            # Update if this DC has higher badPwdCount
+                            ex_entry = entries[existing_index]
+                            if (ex_entry.badPwdCount.value is None or
+                                (entry.badPwdCount.value is not None and
+                                 ex_entry.badPwdCount.value < entry.badPwdCount.value)):
+                                entries[existing_index] = entry
+                        else:
+                            entries.append(entry)
+
+                    cookie = conn.result['controls']['1.2.840.113556.1.4.319']['value']['cookie']
+                    if not cookie:
+                        break
 
         return entries
 

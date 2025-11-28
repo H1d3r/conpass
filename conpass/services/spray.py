@@ -281,7 +281,7 @@ class SprayOrchestrator:
                     page_size=self.config.ldap_page_size,
                     timeout=self.config.timeout,
                     dns_ip=self.config.dns_ip,
-                    console=self.console
+                    console=None  # Don't pass console to workers to avoid display conflicts
                 )
 
             smb_service = SmbService(
