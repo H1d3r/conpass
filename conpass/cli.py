@@ -85,7 +85,7 @@ def spray(
             user_file=user_file,
             user_as_pass=user_as_pass,
             security_threshold=security_threshold,
-            disable_spray=disable_spray or not password_file,
+            disable_spray=disable_spray or (not password_file and not user_as_pass),
             manual_lockout_threshold=lockout_threshold,
             manual_lockout_observation_window=lockout_observation_window,
             max_threads=max_threads,
