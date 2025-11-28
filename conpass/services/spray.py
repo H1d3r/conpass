@@ -93,7 +93,7 @@ class SprayOrchestrator:
 
         # Get DC details
         if not self.config.dc_ip:
-            self.dc_host, self.dc_ip = SmbService.get_dc_details(self.config.domain)
+            self.dc_host, self.dc_ip = SmbService.get_dc_details(self.config.domain, self.config.dns_ip)
         else:
             self.dc_ip = self.config.dc_ip
             self.dc_host = self.config.dc_host or self.dc_ip
@@ -120,6 +120,7 @@ class SprayOrchestrator:
             use_ssl=self.config.use_ssl,
             page_size=self.config.ldap_page_size,
             timeout=self.config.timeout,
+            dns_ip=self.config.dns_ip,
             console=self.console
         )
 
@@ -279,6 +280,7 @@ class SprayOrchestrator:
                     use_ssl=self.config.use_ssl,
                     page_size=self.config.ldap_page_size,
                     timeout=self.config.timeout,
+                    dns_ip=self.config.dns_ip,
                     console=self.console
                 )
 

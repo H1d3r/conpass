@@ -1,5 +1,7 @@
 """Utility functions and helpers."""
 
+from conpass.utils.dns import resolve_hostname
+from conpass.utils.hash import is_nt_hash
 from conpass.utils.logger import get_logger
 from conpass.utils.ntlm import NtlmInfo
 from conpass.utils.time import win_timestamp_to_datetime
@@ -25,7 +27,9 @@ def read_file_blocks(file_handle, block_size: int = 8192):
 
 __all__ = [
     "get_logger",
+    "is_nt_hash",
     "NtlmInfo",
+    "resolve_hostname",
     "win_timestamp_to_datetime",
     "read_file_blocks",
 ]

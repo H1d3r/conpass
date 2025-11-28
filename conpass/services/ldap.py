@@ -8,6 +8,7 @@ from rich.console import Console
 
 from conpass.exceptions import LdapConnectionError
 from conpass.models import Credentials, PasswordPolicy
+from conpass.utils import resolve_hostname
 
 
 class LdapService:
@@ -21,6 +22,7 @@ class LdapService:
         use_ssl: bool = False,
         page_size: int = 1000,
         timeout: int = 3,
+        dns_ip: str | None = None,
         console: Console | None = None
     ):
         self.credentials = credentials
@@ -29,6 +31,7 @@ class LdapService:
         self.use_ssl = use_ssl
         self.page_size = page_size
         self.timeout = timeout
+        self.dns_ip = dns_ip
         self.console = console
 
         self._connections: list[Connection] = []
@@ -131,7 +134,7 @@ class LdapService:
             dns_name = entry.dNSHostName.value
             if dns_name:
                 try:
-                    ip_address = socket.gethostbyname(dns_name)
+                    ip_address = resolve_hostname(dns_name, self.dns_ip)
                     self._all_dc_ips.append(ip_address)
                 except socket.gaierror:
                     pass

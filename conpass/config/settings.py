@@ -10,6 +10,7 @@ class SprayConfig:
     domain: str
     dc_ip: str | None = None
     dc_host: str | None = None
+    dns_ip: str | None = None
 
     # Authentication
     use_ssl: bool = False

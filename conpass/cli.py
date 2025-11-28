@@ -31,6 +31,7 @@ def spray(
     # Connection settings
     dc_ip: str | None = typer.Option(None, "--dc-ip", "-D", help="Domain Controller IP address", rich_help_panel="Authentication"),
     dc_host: str | None = typer.Option(None, "--dc-host", help="Hostname of the DC (default: --dc-ip or --domain)", rich_help_panel="Authentication"),
+    dns_ip: str | None = typer.Option(None, "--dns-ip", help="DNS server IP address for name resolution", rich_help_panel="Authentication"),
     use_ssl: bool = typer.Option(False, "--use-ssl", help="Use LDAP over SSL/TLS (port 636)", rich_help_panel="Authentication"),
     use_kerberos: bool = typer.Option(False, "--kerberos", "-k", help="Use Kerberos authentication", rich_help_panel="Authentication"),
 
@@ -84,6 +85,7 @@ def spray(
             domain=domain,
             dc_ip=dc_ip,
             dc_host=dc_host,
+            dns_ip=dns_ip,
             use_ssl=use_ssl,
             use_kerberos=use_kerberos,
             password_file=password_file,
@@ -115,9 +117,17 @@ def spray(
     try:
         orchestrator = SprayOrchestrator(config=config, credentials=credentials, console=console)
         orchestrator.run()
-    except Exception as e:
-        logger.critical(str(e))
-        console.print_exception()
+    except (ConfigurationError, Exception) as e:
+        # Import here to avoid circular imports
+        from conpass.exceptions import SmbConnectionError, LdapConnectionError
+
+        # For expected errors, just show the message without stack trace
+        if isinstance(e, (ConfigurationError, SmbConnectionError, LdapConnectionError)):
+            logger.error(str(e))
+        else:
+            # For unexpected errors, show full stack trace
+            logger.critical(str(e))
+            console.print_exception()
         raise typer.Exit(code=1) from None
 
 
