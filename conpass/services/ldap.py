@@ -8,7 +8,7 @@ from rich.console import Console
 
 from conpass.exceptions import LdapConnectionError
 from conpass.models import Credentials, PasswordPolicy
-from conpass.utils import resolve_hostname
+from conpass.utils import resolve_hostname, parse_hashes, format_hash_for_ldap
 
 
 class LdapService:
@@ -80,10 +80,19 @@ class LdapService:
         Create a connection to a domain controller.
 
         First tries with SSL and channel binding, falls back to no SSL if needed.
+        Supports both password and NT hash authentication.
 
         Returns:
             Connection object if successful, None otherwise
         """
+        # Determine the password to use (cleartext or hash)
+        if self.credentials.has_hash:
+            # Parse and format hash for LDAP3
+            lm_hash, nt_hash = parse_hashes(self.credentials.hashes)
+            password = format_hash_for_ldap(lm_hash, nt_hash)
+        else:
+            password = self.credentials.password
+
         try:
             # Try with SSL and channel binding first
             try:
@@ -91,7 +100,7 @@ class LdapService:
                 conn = Connection(
                     server,
                     user=self.credentials.user_principal,
-                    password=self.credentials.password,
+                    password=password,
                     authentication=NTLM,
                     auto_referrals=False,
                     channel_binding=TLS_CHANNEL_BINDING,
@@ -105,7 +114,7 @@ class LdapService:
                 conn = Connection(
                     server,
                     user=self.credentials.user_principal,
-                    password=self.credentials.password,
+                    password=password,
                     authentication=NTLM
                 )
                 if conn.bind():

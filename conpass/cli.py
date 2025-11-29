@@ -25,6 +25,7 @@ def spray(
     domain: str = typer.Option(..., "--domain", "-d", help="Domain name (FQDN)", rich_help_panel="Authentication"),
     username: str | None = typer.Option(None, "--username", "-u", help="Domain user", rich_help_panel="Authentication"),
     password: str | None = typer.Option(None, "--password", "-p", help="Domain password", rich_help_panel="Authentication"),
+    hashes: str | None = typer.Option(None, "--hashes", "-H", help="NT hash(es) in format LM:NT, :NT or NT", rich_help_panel="Authentication"),
 
     # Connection settings
     dc_ip: str | None = typer.Option(None, "--dc-ip", "-D", help="Domain Controller IP address", rich_help_panel="Authentication"),
@@ -61,6 +62,7 @@ def spray(
             domain=domain,
             username=username,
             password=password,
+            hashes=hashes,
             user_file=user_file,
             lockout_threshold=lockout_threshold,
             lockout_observation_window=lockout_observation_window,
@@ -101,7 +103,7 @@ def spray(
     credentials = None
     if username:
         try:
-            credentials = _build_credentials(username, domain, password)
+            credentials = _build_credentials(username, domain, password, hashes)
         except ValueError as e:
             logger.error(str(e))
             raise typer.Exit(code=1) from None
@@ -128,6 +130,7 @@ def _validate_inputs(
     domain: str,
     username: str | None,
     password: str | None,
+    hashes: str | None,
     user_file: Path | None,
     lockout_threshold: int | None,
     lockout_observation_window: int | None,
@@ -141,8 +144,11 @@ def _validate_inputs(
     if username is None and user_file is None:
         raise ConfigurationError("Either --username or --user-file is required")
 
-    if username is not None and password is None:
-        raise ConfigurationError("--password is required for authentication")
+    if username is not None and password is None and hashes is None:
+        raise ConfigurationError("Either --password or --hashes is required for authentication")
+
+    if password is not None and hashes is not None:
+        raise ConfigurationError("--password and --hashes are mutually exclusive")
 
     # Check offline mode requirements
     if username is None and user_file:
@@ -172,10 +178,12 @@ def _build_credentials(
     username: str,
     domain: str,
     password: str | None,
+    hashes: str | None,
 ) -> Credentials:
     """Build Credentials object from CLI parameters."""
     return Credentials(
         username=username,
         domain=domain,
         password=password,
+        hashes=hashes,
     )
