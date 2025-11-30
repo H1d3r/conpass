@@ -34,7 +34,7 @@ def spray(
     use_ssl: bool = typer.Option(False, "--use-ssl", help="Use LDAP over SSL/TLS (port 636)", rich_help_panel="Authentication"),
 
     # Spray settings
-    password_file: Path | None = typer.Option(None, "--password-file", "-P", exists=True, file_okay=True, readable=True, resolve_path=True, help="File containing passwords to test", autocompletion=complete_path, rich_help_panel="Spray"),
+    password_file: Path | None = typer.Option(None, "--password-file", "-P", file_okay=True, resolve_path=True, help="File containing passwords to test", autocompletion=complete_path, rich_help_panel="Spray"),
     user_file: Path | None = typer.Option(None, "--user-file", "-U", exists=True, file_okay=True, readable=True, resolve_path=True, help="File containing users to test", autocompletion=complete_path, rich_help_panel="Spray"),
     user_as_pass: bool = typer.Option(False, "--user-as-pass", "-a", help="Enable user-as-pass for each user", rich_help_panel="Spray"),
     security_threshold: int = typer.Option(2, "--security-threshold", "-s", help="Number of remaining attempts before lockout threshold", rich_help_panel="Spray"),
@@ -70,6 +70,14 @@ def spray(
     except ConfigurationError as e:
         logger.error(str(e))
         raise typer.Exit(code=1) from None
+
+    # Ensure password file exists (create if needed)
+    if password_file:
+        try:
+            _ensure_password_file_exists(password_file, logger)
+        except ConfigurationError as e:
+            logger.error(str(e))
+            raise typer.Exit(code=1) from None
 
     # Check password file size
     if password_file:
@@ -157,6 +165,25 @@ def _validate_inputs(
                 "When using --user-file without --username, "
                 "--lockout-threshold and --lockout-observation-window are required"
             )
+
+
+def _ensure_password_file_exists(password_file: Path, logger) -> None:
+    """Ensure password file exists, create it if it doesn't."""
+    if not password_file.exists():
+        try:
+            # Create parent directories if needed
+            password_file.parent.mkdir(parents=True, exist_ok=True)
+            # Create empty file
+            password_file.touch()
+            logger.info(f"Created password file: {password_file}")
+        except PermissionError as e:
+            raise ConfigurationError(
+                f"Permission denied: Cannot create password file '{password_file}'"
+            ) from e
+        except OSError as e:
+            raise ConfigurationError(
+                f"Cannot create password file '{password_file}': {e}"
+            ) from e
 
 
 def _check_password_file_size(password_file: Path, console: Console) -> None:
