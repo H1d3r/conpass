@@ -23,7 +23,8 @@ class LdapService:
         page_size: int = 1000,
         timeout: int = 3,
         dns_ip: str | None = None,
-        console: Console | None = None
+        console: Console | None = None,
+        debug: bool = False
     ):
         self.credentials = credentials
         self.base_dn = base_dn
@@ -33,6 +34,7 @@ class LdapService:
         self.timeout = timeout
         self.dns_ip = dns_ip
         self.console = console
+        self.debug = debug
 
         self._connections: list[Connection] = []
         self._all_dc_ips: list[str] = []
@@ -45,12 +47,41 @@ class LdapService:
         Raises:
             LdapConnectionError: If unable to connect to any DC
         """
-        if not self._all_dc_ips:
-            self._discover_domain_controllers()
+        from rich.progress import Progress, TextColumn, BarColumn, MofNCompleteColumn
 
-        for dc_ip in self._all_dc_ips:
-            conn = self._create_connection(dc_ip)
-            self._connections.append(conn)
+        if not self._all_dc_ips:
+            if self.debug and self.console:
+                self.console.print(f"[cyan][DEBUG] Discovering domain controllers from {self.dc_ip}[/cyan]")
+            self._discover_domain_controllers()
+            if self.debug and self.console:
+                self.console.print(f"[cyan][DEBUG] Discovered {len(self._all_dc_ips)} DC(s): {', '.join(self._all_dc_ips)}[/cyan]")
+
+        # Use progress bar if console is available
+        if self.console:
+            with Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                MofNCompleteColumn(),
+                console=self.console,
+                transient=True
+            ) as progress:
+                task = progress.add_task("Connecting to DCs...", total=len(self._all_dc_ips))
+
+                for dc_ip in self._all_dc_ips:
+                    if self.debug:
+                        self.console.print(f"[cyan][DEBUG] Attempting connection to DC: {dc_ip} (timeout={self.timeout}s)[/cyan]")
+                    conn = self._create_connection(dc_ip)
+                    if conn and self.debug:
+                        self.console.print(f"[cyan][DEBUG] Successfully connected to DC: {dc_ip}[/cyan]")
+                    elif not conn and self.debug:
+                        self.console.print(f"[cyan][DEBUG] Failed to connect to DC: {dc_ip}[/cyan]")
+                    self._connections.append(conn)
+                    progress.update(task, advance=1)
+        else:
+            # No console - connect without progress bar
+            for dc_ip in self._all_dc_ips:
+                conn = self._create_connection(dc_ip)
+                self._connections.append(conn)
 
         # Check if we have at least one successful connection
         if not any(self._connections):
@@ -96,6 +127,8 @@ class LdapService:
         try:
             # Try with SSL and channel binding first
             try:
+                if self.debug and self.console:
+                    self.console.print(f"[cyan][DEBUG] Trying SSL connection with channel binding to {dc_ip}[/cyan]")
                 server = self._create_ldap_server(dc_ip, True)
                 conn = Connection(
                     server,
@@ -104,23 +137,33 @@ class LdapService:
                     authentication=NTLM,
                     auto_referrals=False,
                     channel_binding=TLS_CHANNEL_BINDING,
+                    receive_timeout=self.timeout,
                 )
                 if not conn.bind():
                     raise LDAPBindError("Channel binding failed")
+                if self.debug and self.console:
+                    self.console.print(f"[cyan][DEBUG] SSL connection successful to {dc_ip}[/cyan]")
                 return conn
-            except (ssl.SSLError, socket.error, LDAPBindError):
+            except (ssl.SSLError, socket.error, LDAPBindError) as e:
                 # Fall back to non-SSL
+                if self.debug and self.console:
+                    self.console.print(f"[cyan][DEBUG] SSL failed for {dc_ip} ({type(e).__name__}), trying non-SSL[/cyan]")
                 server = self._create_ldap_server(dc_ip, False)
                 conn = Connection(
                     server,
                     user=self.credentials.user_principal,
                     password=password,
-                    authentication=NTLM
+                    authentication=NTLM,
+                    receive_timeout=self.timeout,
                 )
                 if conn.bind():
+                    if self.debug and self.console:
+                        self.console.print(f"[cyan][DEBUG] Non-SSL connection successful to {dc_ip}[/cyan]")
                     return conn
                 return None
-        except Exception:
+        except Exception as e:
+            if self.debug and self.console:
+                self.console.print(f"[cyan][DEBUG] Connection failed to {dc_ip}: {type(e).__name__}[/cyan]")
             return None
 
     def _discover_domain_controllers(self) -> None:
@@ -128,6 +171,9 @@ class LdapService:
         conn = self._create_connection(self.dc_ip)
         if not conn:
             raise LdapConnectionError(f"Could not connect to {self.dc_ip}")
+
+        # Always include the initial DC first (it's the one we can reach)
+        self._all_dc_ips.append(self.dc_ip)
 
         search_filter = "(userAccountControl:1.2.840.113556.1.4.803:=8192)"
         attributes = ['dNSHostName']
@@ -144,7 +190,9 @@ class LdapService:
             if dns_name:
                 try:
                     ip_address = resolve_hostname(dns_name, self.dns_ip)
-                    self._all_dc_ips.append(ip_address)
+                    # Avoid duplicates - don't add if it's the same as the initial DC
+                    if ip_address != self.dc_ip and ip_address not in self._all_dc_ips:
+                        self._all_dc_ips.append(ip_address)
                 except socket.gaierror:
                     pass
 

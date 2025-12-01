@@ -95,12 +95,20 @@ class SprayOrchestrator:
 
         # Get DC details
         if not self.config.dc_ip:
+            if self.config.debug:
+                self.console.print(f"[cyan][DEBUG] Resolving DC details for domain: {self.config.domain}[/cyan]")
             self.dc_host, self.dc_ip = SmbService.get_dc_details(self.config.domain, self.config.dns_ip)
+            if self.config.debug:
+                self.console.print(f"[cyan][DEBUG] Resolved DC: {self.dc_host} ({self.dc_ip})[/cyan]")
         else:
             self.dc_ip = self.config.dc_ip
             self.dc_host = self.config.dc_host or self.dc_ip
+            if self.config.debug:
+                self.console.print(f"[cyan][DEBUG] Using provided DC: {self.dc_host} ({self.dc_ip})[/cyan]")
 
         # Get time delta
+        if self.config.debug:
+            self.console.print(f"[cyan][DEBUG] Getting time delta with DC: {self.dc_ip}[/cyan]")
         self.time_delta = SmbService.get_time_delta(self.dc_ip)
         self.console.print(
             f"Time difference with '{self.dc_host}' ({self.dc_ip}): "
@@ -108,13 +116,19 @@ class SprayOrchestrator:
         )
 
         if self.config.is_online_mode:
+            if self.config.debug:
+                self.console.print("[cyan][DEBUG] Running in online mode (with LDAP)[/cyan]")
             self._gather_online_mode()
         else:
+            if self.config.debug:
+                self.console.print("[cyan][DEBUG] Running in offline mode (no LDAP)[/cyan]")
             self._gather_offline_mode()
 
     def _gather_online_mode(self) -> None:
         """Gather information in online mode (with LDAP access)."""
         # Create LDAP service
+        if self.config.debug:
+            self.console.print(f"[cyan][DEBUG] Creating LDAP service (base_dn={self.config.base_dn}, use_ssl={self.config.use_ssl})[/cyan]")
         self.ldap_service = LdapService(
             credentials=self.credentials,
             base_dn=self.config.base_dn,
@@ -123,10 +137,13 @@ class SprayOrchestrator:
             page_size=self.config.ldap_page_size,
             timeout=self.config.timeout,
             dns_ip=self.config.dns_ip,
-            console=self.console
+            console=self.console,
+            debug=self.config.debug
         )
 
         # Connect to all DCs
+        if self.config.debug:
+            self.console.print(f"[cyan][DEBUG] Connecting to all Domain Controllers via LDAP[/cyan]")
         self.ldap_service.connect()
         all_dc_ips = self.ldap_service.get_dc_ips()
         self.console.print(
@@ -134,6 +151,8 @@ class SprayOrchestrator:
         )
 
         # Create policy service
+        if self.config.debug:
+            self.console.print(f"[cyan][DEBUG] Creating policy service (security_threshold={self.config.security_threshold})[/cyan]")
         self.policy_service = PolicyService(
             ldap_service=self.ldap_service,
             security_threshold=self.config.security_threshold,
@@ -142,12 +161,28 @@ class SprayOrchestrator:
         )
 
         # Load policies
+        if self.config.debug:
+            self.console.print(f"[cyan][DEBUG] Loading password policies from LDAP[/cyan]")
         self.policy_service.load_policies()
         self.default_policy = self.policy_service.get_default_policy()
         self.psos = self.policy_service.get_psos()
 
+        if self.config.debug:
+            self.console.print(f"[cyan][DEBUG] Loaded default policy: lockout_threshold={self.default_policy.lockout_threshold}, "
+                             f"lockout_window={self.default_policy.lockout_window_seconds}s[/cyan]")
+            if self.psos:
+                self.console.print(f"[cyan][DEBUG] Loaded {len(self.psos)} PSO(s)[/cyan]")
+                for pso in self.psos:
+                    self.console.print(f"[cyan][DEBUG]   - {pso.name}: lockout_threshold={pso.lockout_threshold}, "
+                                     f"lockout_window={pso.lockout_window_seconds}s[/cyan]")
+
         # Build user list
         user_filter = self._read_user_file() if self.config.user_file else None
+        if self.config.debug:
+            if user_filter:
+                self.console.print(f"[cyan][DEBUG] Using user filter from file: {len(user_filter)} user(s)[/cyan]")
+            else:
+                self.console.print(f"[cyan][DEBUG] Building user list from LDAP (no user filter)[/cyan]")
         self.users = self.policy_service.build_user_list(user_filter)
 
         # Display policies
@@ -155,6 +190,14 @@ class SprayOrchestrator:
 
         # Display user count
         self.console.print(f"[bold green]Total sprayed users: {len(self.users)}[/bold green]")
+        if self.config.debug:
+            policies_distribution = {}
+            for user in self.users:
+                policy_name = user.policy.name
+                policies_distribution[policy_name] = policies_distribution.get(policy_name, 0) + 1
+            self.console.print(f"[cyan][DEBUG] User distribution by policy:[/cyan]")
+            for policy_name, count in policies_distribution.items():
+                self.console.print(f"[cyan][DEBUG]   - {policy_name}: {count} user(s)[/cyan]")
 
     def _gather_offline_mode(self) -> None:
         """Gather information in offline mode (no LDAP access)."""
@@ -166,6 +209,9 @@ class SprayOrchestrator:
         )
 
         # Create manual policy
+        if self.config.debug:
+            self.console.print(f"[cyan][DEBUG] Creating manual policy (lockout_threshold={self.config.manual_lockout_threshold}, "
+                             f"lockout_window={self.config.manual_lockout_observation_window}s)[/cyan]")
         self.default_policy = PasswordPolicy(
             name="Manual Domain Policy",
             lockout_threshold=self.config.manual_lockout_threshold,
@@ -185,7 +231,12 @@ class SprayOrchestrator:
         self.console.print(table)
 
         # Build user list from file
+        if self.config.debug:
+            self.console.print(f"[cyan][DEBUG] Reading user list from file: {self.config.user_file}[/cyan]")
         usernames = self._read_user_file()
+        if self.config.debug:
+            self.console.print(f"[cyan][DEBUG] Read {len(usernames)} user(s) from file[/cyan]")
+
         self.users = [
             User(
                 samaccountname=username,
@@ -286,7 +337,8 @@ class SprayOrchestrator:
                     page_size=self.config.ldap_page_size,
                     timeout=self.config.timeout,
                     dns_ip=self.config.dns_ip,
-                    console=None  # Don't pass console to workers to avoid display conflicts
+                    console=None,  # Don't pass console to workers to avoid display conflicts
+                    debug=False  # Don't pass debug to workers to avoid display conflicts
                 )
 
             smb_service = SmbService(
