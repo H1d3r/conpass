@@ -192,28 +192,14 @@ class User:
         with self._lock:
             return self._is_restricted
 
-    def update_from_ldap(self, bad_password_count: int, bad_password_time: datetime) -> bool:
+    def update_from_ldap(self, bad_password_count: int, bad_password_time: datetime) -> None:
         """
         Update bad password information from DC.
 
         MUST be called while holding the lock to ensure thread-safety.
-
-        Returns:
-            True if a password in history might be correct
         """
-        password_in_history = False
-
-        # Check if password might be in history
-        # (local time > DC time AND local count > DC count)
-        if (self._bad_password_time > bad_password_time and
-            self._bad_password_count > bad_password_count and
-            len(self._tested_passwords) > 0):
-            password_in_history = True
-
         self._bad_password_count = bad_password_count
         self._bad_password_time = bad_password_time
-
-        return password_in_history
 
     def get_status(self) -> UserStatus:
         """Get current user status (thread-safe read)."""

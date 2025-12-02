@@ -3,7 +3,7 @@ import ssl
 from datetime import datetime, timezone
 
 from ldap3 import ALL, NTLM, Connection, Server, SUBTREE, Tls, TLS_CHANNEL_BINDING
-from ldap3.core.exceptions import LDAPBindError
+from ldap3.core.exceptions import LDAPBindError, LDAPSocketReceiveError
 from rich.console import Console
 
 from conpass.exceptions import LdapConnectionError
@@ -306,6 +306,53 @@ class LdapService:
 
                 for conn in self._connections:
                     cookie = None
+                    try:
+                        while True:
+                            conn.search(
+                                self.base_dn,
+                                search_filter,
+                                attributes=attributes,
+                                paged_size=self.page_size,
+                                paged_cookie=cookie
+                            )
+
+                            for entry in conn.entries:
+                                # Find if user already exists in results
+                                existing_index = None
+                                for idx, ex_entry in enumerate(entries):
+                                    if ex_entry.samAccountName == entry.samAccountName:
+                                        existing_index = idx
+                                        break
+
+                                if existing_index is not None:
+                                    # Update if this DC has higher badPwdCount
+                                    ex_entry = entries[existing_index]
+                                    if (ex_entry.badPwdCount.value is None or
+                                        (entry.badPwdCount.value is not None and
+                                         ex_entry.badPwdCount.value < entry.badPwdCount.value)):
+                                        entries[existing_index] = entry
+                                else:
+                                    entries.append(entry)
+
+                            # Update progress
+                            progress.update(task, description=f"Loading users from LDAP... {len(entries)} loaded")
+
+                            cookie = conn.result['controls']['1.2.840.113556.1.4.319']['value']['cookie']
+                            if not cookie:
+                                break
+                    except LDAPSocketReceiveError:
+                        # Timeout during search - continue with data already collected
+                        if self.console:
+                            self.console.print(f"[yellow]⚠ LDAP timeout while loading users, continuing with {len(entries)} users already loaded[/yellow]")
+                        break
+
+            # Display final message after spinner disappears
+            self.console.print(f"[green]✓ Loaded {len(entries)} users from LDAP")
+        else:
+            # No console - load without progress display
+            for conn in self._connections:
+                cookie = None
+                try:
                     while True:
                         conn.search(
                             self.base_dn,
@@ -333,49 +380,12 @@ class LdapService:
                             else:
                                 entries.append(entry)
 
-                        # Update progress
-                        progress.update(task, description=f"Loading users from LDAP... {len(entries)} loaded")
-
                         cookie = conn.result['controls']['1.2.840.113556.1.4.319']['value']['cookie']
                         if not cookie:
                             break
-
-            # Display final message after spinner disappears
-            self.console.print(f"[green]✓ Loaded {len(entries)} users from LDAP")
-        else:
-            # No console - load without progress display
-            for conn in self._connections:
-                cookie = None
-                while True:
-                    conn.search(
-                        self.base_dn,
-                        search_filter,
-                        attributes=attributes,
-                        paged_size=self.page_size,
-                        paged_cookie=cookie
-                    )
-
-                    for entry in conn.entries:
-                        # Find if user already exists in results
-                        existing_index = None
-                        for idx, ex_entry in enumerate(entries):
-                            if ex_entry.samAccountName == entry.samAccountName:
-                                existing_index = idx
-                                break
-
-                        if existing_index is not None:
-                            # Update if this DC has higher badPwdCount
-                            ex_entry = entries[existing_index]
-                            if (ex_entry.badPwdCount.value is None or
-                                (entry.badPwdCount.value is not None and
-                                 ex_entry.badPwdCount.value < entry.badPwdCount.value)):
-                                entries[existing_index] = entry
-                        else:
-                            entries.append(entry)
-
-                    cookie = conn.result['controls']['1.2.840.113556.1.4.319']['value']['cookie']
-                    if not cookie:
-                        break
+                except LDAPSocketReceiveError:
+                    # Timeout during search - continue with data already collected
+                    break
 
         return entries
 

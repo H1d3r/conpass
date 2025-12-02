@@ -246,15 +246,7 @@ class Worker(threading.Thread):
 
         # Check if count changed
         if bad_pwd_count != user.get_bad_password_count():
-            password_in_history = user.update_from_ldap(bad_pwd_count, bad_pwd_time)
-
-            if password_in_history:
-                tested_passwords = user.get_tested_passwords()
-                if tested_passwords:
-                    self.console.print(
-                        f"[yellow]{user.samaccountname}[/yellow] may have "
-                        f"[yellow]{tested_passwords[-1]}[/yellow] in password history"
-                    )
+            user.update_from_ldap(bad_pwd_count, bad_pwd_time)
 
     def _auth_status_to_user_status(self, auth_status: AuthStatus) -> UserStatus:
         """Convert AuthStatus to UserStatus."""
