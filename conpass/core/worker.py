@@ -192,7 +192,74 @@ class Worker(threading.Thread):
             # Test the password
             if self.debug:
                 self.console.print(f"[green]🔑 Worker {self.worker_id}: TESTING {user.samaccountname}/{password}[/green]")
-            status = self.smb_service.test_credentials(user.samaccountname, password)
+
+            try:
+                status = self.smb_service.test_credentials(user.samaccountname, password)
+            except UserLockedOutError:
+                # Lockout detected during SMB auth - add comprehensive debug info
+                from datetime import datetime, timezone
+                current_dc_time = datetime.now(timezone.utc) - user.time_delta
+                obs_window_end = user.get_observation_window_end()
+                obs_window_passed = user.is_observation_window_passed(current_dc_time)
+                time_since_last_bad = (current_dc_time - user._bad_password_time).total_seconds()
+
+                self.console.print(
+                    f"[red]═══════════════════════════════════════════════════════════[/red]\n"
+                    f"[red bold]LOCKOUT DETECTED - FULL DEBUG INFO[/red bold]\n"
+                    f"[red]═══════════════════════════════════════════════════════════[/red]\n"
+                    f"[yellow]Detection source:[/yellow] SMB_AUTH_RESPONSE\n"
+                    f"[yellow]Worker ID:[/yellow] {self.worker_id}\n"
+                    f"[yellow]Online mode:[/yellow] {self.online_mode}\n"
+                    f"\n"
+                    f"[cyan]USER STATE:[/cyan]\n"
+                    f"  Username: {user.samaccountname}\n"
+                    f"  DN: {user.dn}\n"
+                    f"  Bad password count (before test): {user._bad_password_count}\n"
+                    f"  Remaining attempts (calculated before test): {user.get_remaining_attempts()}\n"
+                    f"  Tested passwords count (before this test): {len(user._tested_passwords)}\n"
+                    f"  Tested passwords: {', '.join(user._tested_passwords[-5:])} "
+                    f"{'(showing last 5)' if len(user._tested_passwords) > 5 else ''}\n"
+                    f"  Current password being tested: {password}\n"
+                    f"  Found password: {user._found_password}\n"
+                    f"  Is restricted: {user._is_restricted}\n"
+                    f"  Status: {user._status.value}\n"
+                    f"\n"
+                    f"[cyan]PASSWORD POLICY:[/cyan]\n"
+                    f"  Policy name: {user.policy.name}\n"
+                    f"  Lockout threshold: {user.policy.lockout_threshold}\n"
+                    f"  Observation window (seconds): {user.policy.lockout_window_seconds}\n"
+                    f"  Allows spraying: {user.policy.allows_spraying}\n"
+                    f"\n"
+                    f"[cyan]CONFIGURATION:[/cyan]\n"
+                    f"  Security threshold: {user.security_threshold}\n"
+                    f"  Max allowed attempts: {user.policy.lockout_threshold - user.security_threshold}\n"
+                    f"\n"
+                    f"[cyan]TIMING:[/cyan]\n"
+                    f"  Current DC time: {current_dc_time.isoformat()}\n"
+                    f"  Last bad password time: {user._bad_password_time.isoformat()}\n"
+                    f"  Time since last bad password: {time_since_last_bad:.2f}s\n"
+                    f"  Observation window end: {obs_window_end.isoformat()}\n"
+                    f"  Observation window passed: {obs_window_passed}\n"
+                    f"  Time until window end: {(obs_window_end - current_dc_time).total_seconds():.2f}s\n"
+                    f"\n"
+                    f"[cyan]ANTI-LOCKOUT CHECKS (before this test):[/cyan]\n"
+                    f"  can_test_password() returned: {can_test}\n"
+                    f"  can_test reason: {reason}\n"
+                    f"  Remaining attempts reported: {remaining}\n"
+                    f"  Bad count before test: {bad_count}\n"
+                    f"  LDAP update performed: {self.online_mode}\n"
+                    f"\n"
+                    f"[red]═══════════════════════════════════════════════════════════[/red]\n"
+                    f"[red bold]ANALYSIS:[/red bold]\n"
+                    f"  Expected max attempts: {user.policy.lockout_threshold - user.security_threshold}\n"
+                    f"  Actual tested count (before this): {len(user._tested_passwords)}\n"
+                    f"  Bad password count before this test: {user._bad_password_count}\n"
+                    f"  [red]This indicates a potential race condition or policy miscalculation![/red]\n"
+                    f"  [red]The SMB server reported account lockout status.[/red]\n"
+                    f"[red]═══════════════════════════════════════════════════════════[/red]"
+                )
+                # Re-raise to trigger worker shutdown
+                raise
 
             # Convert AuthStatus to UserStatus
             user_status = self._auth_status_to_user_status(status)
@@ -216,6 +283,66 @@ class Worker(threading.Thread):
                         f"(likely Protected Users) - DISCARDING from further tests[/bright_black]"
                     )
                 elif user_status == UserStatus.LOCKED_OUT:
+                    # CRITICAL: Capture full state for debugging
+                    from datetime import datetime, timezone
+                    current_dc_time = datetime.now(timezone.utc) - user.time_delta
+                    obs_window_end = user.get_observation_window_end()
+                    obs_window_passed = user.is_observation_window_passed(current_dc_time)
+                    time_since_last_bad = (current_dc_time - user._bad_password_time).total_seconds()
+
+                    self.console.print(
+                        f"[red]═══════════════════════════════════════════════════════════[/red]\n"
+                        f"[red bold]LOCKOUT DETECTED - FULL DEBUG INFO[/red bold]\n"
+                        f"[red]═══════════════════════════════════════════════════════════[/red]\n"
+                        f"[yellow]Detection source:[/yellow] LDAP_STATUS_UPDATE\n"
+                        f"[yellow]Worker ID:[/yellow] {self.worker_id}\n"
+                        f"[yellow]Online mode:[/yellow] {self.online_mode}\n"
+                        f"\n"
+                        f"[cyan]USER STATE:[/cyan]\n"
+                        f"  Username: {user.samaccountname}\n"
+                        f"  DN: {user.dn}\n"
+                        f"  Bad password count: {user._bad_password_count}\n"
+                        f"  Remaining attempts (calculated): {user.get_remaining_attempts()}\n"
+                        f"  Tested passwords count: {len(user._tested_passwords)}\n"
+                        f"  Tested passwords: {', '.join(user._tested_passwords[-5:])} "
+                        f"{'(showing last 5)' if len(user._tested_passwords) > 5 else ''}\n"
+                        f"  Current password being tested: {password}\n"
+                        f"  Found password: {user._found_password}\n"
+                        f"  Is restricted: {user._is_restricted}\n"
+                        f"  Status: {user._status.value}\n"
+                        f"\n"
+                        f"[cyan]PASSWORD POLICY:[/cyan]\n"
+                        f"  Policy name: {user.policy.name}\n"
+                        f"  Lockout threshold: {user.policy.lockout_threshold}\n"
+                        f"  Observation window (seconds): {user.policy.lockout_window_seconds}\n"
+                        f"  Allows spraying: {user.policy.allows_spraying}\n"
+                        f"\n"
+                        f"[cyan]CONFIGURATION:[/cyan]\n"
+                        f"  Security threshold: {user.security_threshold}\n"
+                        f"  Max allowed attempts: {user.policy.lockout_threshold - user.security_threshold}\n"
+                        f"\n"
+                        f"[cyan]TIMING:[/cyan]\n"
+                        f"  Current DC time: {current_dc_time.isoformat()}\n"
+                        f"  Last bad password time: {user._bad_password_time.isoformat()}\n"
+                        f"  Time since last bad password: {time_since_last_bad:.2f}s\n"
+                        f"  Observation window end: {obs_window_end.isoformat()}\n"
+                        f"  Observation window passed: {obs_window_passed}\n"
+                        f"  Time until window end: {(obs_window_end - current_dc_time).total_seconds():.2f}s\n"
+                        f"\n"
+                        f"[cyan]ANTI-LOCKOUT CHECKS (before this test):[/cyan]\n"
+                        f"  can_test_password() returned: {can_test}\n"
+                        f"  can_test reason: {reason}\n"
+                        f"  Remaining attempts reported: {remaining}\n"
+                        f"  Bad count before test: {bad_count}\n"
+                        f"\n"
+                        f"[red]═══════════════════════════════════════════════════════════[/red]\n"
+                        f"[red bold]ANALYSIS:[/red bold]\n"
+                        f"  Expected max attempts: {user.policy.lockout_threshold - user.security_threshold}\n"
+                        f"  Actual tested count: {len(user._tested_passwords)}\n"
+                        f"  Bad password count at lockout: {user._bad_password_count}\n"
+                        f"  [red]This indicates a potential race condition or policy miscalculation![/red]\n"
+                        f"[red]═══════════════════════════════════════════════════════════[/red]"
+                    )
                     # This will raise UserLockedOutError
                     raise UserLockedOutError(user.samaccountname)
 

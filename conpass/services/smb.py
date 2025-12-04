@@ -99,6 +99,12 @@ class SmbService:
                         f"[red]DANGER: {username} LOCKED OUT - ABORTING "
                         f"(Unlock-ADAccount -Identity {username})[/red]"
                     )
+                    self.console.print(
+                        f"[red]LOCKOUT DETAILS: Detection source=SMB_AUTH_RESPONSE, "
+                        f"username={username}, password={'[HASH]' if is_nt_hash(password) else '[CLEARTEXT]'}, "
+                        f"status={status.value}, exception_type={type(e).__name__}, "
+                        f"exception_msg={str(e)}[/red]"
+                    )
                 raise UserLockedOutError(username) from e
 
             return status
