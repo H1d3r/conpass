@@ -66,6 +66,7 @@ class PolicyService:
             'samAccountName',
             'badPwdCount',
             'badPasswordTime',
+            'lockoutTime',
             'distinguishedName',
             'msDS-ResultantPSO',
             'userAccountControl'
@@ -138,6 +139,7 @@ class PolicyService:
                 bad_password_time=entry.badPasswordTime.value if entry.badPasswordTime.value else datetime(1970, 1, 1, tzinfo=timezone.utc),
                 time_delta=self.time_delta,
                 security_threshold=self.security_threshold,
+                lockout_time=entry.lockoutTime.value if entry.lockoutTime and entry.lockoutTime.value else datetime(1970, 1, 1, tzinfo=timezone.utc),
             )
 
             users.append(user)

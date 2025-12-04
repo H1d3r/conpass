@@ -203,6 +203,20 @@ class Worker(threading.Thread):
                 obs_window_passed = user.is_observation_window_passed(current_dc_time)
                 time_since_last_bad = (current_dc_time - user._bad_password_time).total_seconds()
 
+                # Query all DCs for badPwdCount and lockoutTime (online mode only)
+                dc_status_info = ""
+                if self.online_mode and self.ldap_service:
+                    dc_statuses = self.ldap_service.get_user_password_status_per_dc(user.samaccountname)
+                    if dc_statuses:
+                        dc_status_info = "\n[cyan]STATUS PER DC:[/cyan]\n"
+                        for dc_status in dc_statuses:
+                            dc_status_info += (
+                                f"  DC {dc_status['dc_ip']}:\n"
+                                f"    badPwdCount: {dc_status['bad_pwd_count']}\n"
+                                f"    badPasswordTime: {dc_status['bad_pwd_time'].isoformat()}\n"
+                                f"    lockoutTime: {dc_status['lockout_time'].isoformat()}\n"
+                            )
+
                 self.console.print(
                     f"[red]═══════════════════════════════════════════════════════════[/red]\n"
                     f"[red bold]LOCKOUT DETECTED - FULL DEBUG INFO[/red bold]\n"
@@ -248,6 +262,7 @@ class Worker(threading.Thread):
                     f"  Remaining attempts reported: {remaining}\n"
                     f"  Bad count before test: {bad_count}\n"
                     f"  LDAP update performed: {self.online_mode}\n"
+                    f"{dc_status_info}"
                     f"\n"
                     f"[red]═══════════════════════════════════════════════════════════[/red]\n"
                     f"[red bold]ANALYSIS:[/red bold]\n"
@@ -289,6 +304,20 @@ class Worker(threading.Thread):
                     obs_window_end = user.get_observation_window_end()
                     obs_window_passed = user.is_observation_window_passed(current_dc_time)
                     time_since_last_bad = (current_dc_time - user._bad_password_time).total_seconds()
+
+                    # Query all DCs for badPwdCount and lockoutTime (online mode only)
+                    dc_status_info = ""
+                    if self.online_mode and self.ldap_service:
+                        dc_statuses = self.ldap_service.get_user_password_status_per_dc(user.samaccountname)
+                        if dc_statuses:
+                            dc_status_info = "\n[cyan]STATUS PER DC:[/cyan]\n"
+                            for dc_status in dc_statuses:
+                                dc_status_info += (
+                                    f"  DC {dc_status['dc_ip']}:\n"
+                                    f"    badPwdCount: {dc_status['bad_pwd_count']}\n"
+                                    f"    badPasswordTime: {dc_status['bad_pwd_time'].isoformat()}\n"
+                                    f"    lockoutTime: {dc_status['lockout_time'].isoformat()}\n"
+                                )
 
                     self.console.print(
                         f"[red]═══════════════════════════════════════════════════════════[/red]\n"
@@ -334,6 +363,7 @@ class Worker(threading.Thread):
                         f"  can_test reason: {reason}\n"
                         f"  Remaining attempts reported: {remaining}\n"
                         f"  Bad count before test: {bad_count}\n"
+                        f"{dc_status_info}"
                         f"\n"
                         f"[red]═══════════════════════════════════════════════════════════[/red]\n"
                         f"[red bold]ANALYSIS:[/red bold]\n"
@@ -362,18 +392,17 @@ class Worker(threading.Thread):
 
     def _update_user_from_ldap(self, user: User) -> None:
         """
-        Update user's bad password info from LDAP.
+        Update user's bad password info and lockout status from LDAP.
 
         MUST be called while holding the user lock.
         """
         if not self.ldap_service:
             return
 
-        bad_pwd_count, bad_pwd_time = self.ldap_service.get_user_password_status(user.samaccountname)
+        bad_pwd_count, bad_pwd_time, lockout_time = self.ldap_service.get_user_password_status(user.samaccountname)
 
-        # Check if count changed
-        if bad_pwd_count != user.get_bad_password_count():
-            user.update_from_ldap(bad_pwd_count, bad_pwd_time)
+        # Update user state (always update to get latest lockout_time)
+        user.update_from_ldap(bad_pwd_count, bad_pwd_time, lockout_time)
 
     def _auth_status_to_user_status(self, auth_status: AuthStatus) -> UserStatus:
         """Convert AuthStatus to UserStatus."""

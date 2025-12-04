@@ -212,23 +212,60 @@ class LdapService:
         """
         conn = self._connections[0]
         search_filter = "(objectClass=domain)"
-        attributes = ['lockoutThreshold', 'lockoutDuration', 'lockOutObservationWindow']
+        attributes = [
+            'lockoutThreshold', 'lockoutDuration', 'lockOutObservationWindow',
+            'minPwdLength', 'pwdHistoryLength', 'maxPwdAge', 'minPwdAge', 'pwdProperties'
+        ]
 
         conn.search(self.base_dn, search_filter, attributes=attributes)
         entry = conn.entries[0]
 
         lockout_threshold = entry.lockoutThreshold.value if entry.lockoutThreshold else 0
 
-        # lockOutObservationWindow is already a timedelta
+        # lockOutObservationWindow is a timedelta
         if entry.lockOutObservationWindow:
             lockout_window = int(abs(entry.lockOutObservationWindow.value.total_seconds()))
         else:
             lockout_window = 0
 
+        # lockoutDuration is a timedelta
+        if entry.lockoutDuration:
+            lockout_duration = int(abs(entry.lockoutDuration.value.total_seconds()))
+        else:
+            lockout_duration = 0
+
+        # minPwdLength
+        min_pwd_length = entry.minPwdLength.value if entry.minPwdLength else 0
+
+        # pwdHistoryLength
+        pwd_history_length = entry.pwdHistoryLength.value if entry.pwdHistoryLength else 0
+
+        # maxPwdAge is a timedelta (convert to days)
+        if entry.maxPwdAge:
+            max_pwd_age_days = int(abs(entry.maxPwdAge.value.total_seconds()) / 86400)
+        else:
+            max_pwd_age_days = 0
+
+        # minPwdAge is a timedelta (convert to days)
+        if entry.minPwdAge:
+            min_pwd_age_days = int(abs(entry.minPwdAge.value.total_seconds()) / 86400)
+        else:
+            min_pwd_age_days = 0
+
+        # pwdProperties bit flag (DOMAIN_PASSWORD_COMPLEX = 0x1)
+        pwd_properties = entry.pwdProperties.value if entry.pwdProperties else 0
+        complexity_enabled = bool(pwd_properties & 0x1)
+
         return PasswordPolicy(
             name='Default Domain Policy',
             lockout_threshold=lockout_threshold,
-            lockout_window_seconds=lockout_window
+            lockout_window_seconds=lockout_window,
+            lockout_duration_seconds=lockout_duration,
+            min_pwd_length=min_pwd_length,
+            pwd_history_length=pwd_history_length,
+            max_pwd_age_days=max_pwd_age_days,
+            min_pwd_age_days=min_pwd_age_days,
+            complexity_enabled=complexity_enabled
         )
 
     def get_password_setting_objects(self) -> list[PasswordPolicy]:
@@ -241,7 +278,11 @@ class LdapService:
         conn = self._connections[0]
         pso_base_dn = f"CN=Password Settings Container,CN=System,{self.base_dn}"
         pso_filter = "(objectClass=msDS-PasswordSettings)"
-        pso_attributes = ['name', 'msDS-LockoutThreshold', 'msDS-LockoutObservationWindow']
+        pso_attributes = [
+            'name', 'msDS-LockoutThreshold', 'msDS-LockoutObservationWindow', 'msDS-LockoutDuration',
+            'msDS-MinimumPasswordLength', 'msDS-PasswordHistoryLength',
+            'msDS-MaximumPasswordAge', 'msDS-MinimumPasswordAge', 'msDS-PasswordComplexityEnabled'
+        ]
 
         try:
             if not conn.search(pso_base_dn, pso_filter, attributes=pso_attributes):
@@ -266,10 +307,43 @@ class LdapService:
             else:
                 lockout_window = 0
 
+            # msDS-LockoutDuration is a FILETIME (int), not timedelta
+            if entry['msDS-LockoutDuration']:
+                lockout_duration = int(-(entry['msDS-LockoutDuration'].value / 10000000))
+            else:
+                lockout_duration = 0
+
+            # msDS-MinimumPasswordLength
+            min_pwd_length = entry['msDS-MinimumPasswordLength'].value if entry['msDS-MinimumPasswordLength'] else 0
+
+            # msDS-PasswordHistoryLength
+            pwd_history_length = entry['msDS-PasswordHistoryLength'].value if entry['msDS-PasswordHistoryLength'] else 0
+
+            # msDS-MaximumPasswordAge is a FILETIME (convert to days)
+            if entry['msDS-MaximumPasswordAge']:
+                max_pwd_age_days = int(-(entry['msDS-MaximumPasswordAge'].value / 10000000) / 86400)
+            else:
+                max_pwd_age_days = 0
+
+            # msDS-MinimumPasswordAge is a FILETIME (convert to days)
+            if entry['msDS-MinimumPasswordAge']:
+                min_pwd_age_days = int(-(entry['msDS-MinimumPasswordAge'].value / 10000000) / 86400)
+            else:
+                min_pwd_age_days = 0
+
+            # msDS-PasswordComplexityEnabled is a boolean
+            complexity_enabled = entry['msDS-PasswordComplexityEnabled'].value if entry['msDS-PasswordComplexityEnabled'] else False
+
             psos.append(PasswordPolicy(
                 name=entry.name.value if entry.name else "Unknown",
                 lockout_threshold=lockout_threshold,
                 lockout_window_seconds=lockout_window,
+                lockout_duration_seconds=lockout_duration,
+                min_pwd_length=min_pwd_length,
+                pwd_history_length=pwd_history_length,
+                max_pwd_age_days=max_pwd_age_days,
+                min_pwd_age_days=min_pwd_age_days,
+                complexity_enabled=complexity_enabled
             ))
 
         return psos
@@ -389,27 +463,73 @@ class LdapService:
 
         return entries
 
-    def get_user_password_status(self, samaccountname: str) -> tuple[int, datetime]:
+    def get_user_password_status(self, samaccountname: str) -> tuple[int, datetime, datetime]:
         """
-        Get user's bad password count and time from all DCs (returns max).
+        Get user's bad password count, time, and lockout time from all DCs (returns max).
 
         Args:
             samaccountname: User's SAM account name
 
         Returns:
-            Tuple of (bad_password_count, bad_password_time)
+            Tuple of (bad_password_count, bad_password_time, lockout_time)
         """
         search_filter = f"(&(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2))(sAMAccountName={samaccountname}))"
-        attributes = ['samAccountName', 'badPwdCount', 'badPasswordTime']
+        attributes = ['samAccountName', 'badPwdCount', 'badPasswordTime', 'lockoutTime']
 
         entries = self.search_users(search_filter, attributes)
 
         if not entries:
-            return (0, datetime(1970, 1, 1, tzinfo=timezone.utc))
+            epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+            return (0, epoch, epoch)
 
         entry = entries[0]
         bad_password_count = entry.badPwdCount.value if entry.badPwdCount.value is not None else 0
         bad_password_time = entry.badPasswordTime.value if entry.badPasswordTime.value else datetime(1970, 1, 1, tzinfo=timezone.utc)
+        lockout_time = entry.lockoutTime.value if entry.lockoutTime and entry.lockoutTime.value else datetime(1970, 1, 1, tzinfo=timezone.utc)
 
-        return (bad_password_count, bad_password_time)
+        return (bad_password_count, bad_password_time, lockout_time)
+
+    def get_user_password_status_per_dc(self, samaccountname: str) -> list[dict]:
+        """
+        Get user's bad password count, lockout time, and bad password time from each DC individually.
+
+        Args:
+            samaccountname: User's SAM account name
+
+        Returns:
+            List of dicts with keys: dc_ip, bad_pwd_count, bad_pwd_time, lockout_time
+        """
+        search_filter = f"(&(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2))(sAMAccountName={samaccountname}))"
+        attributes = ['samAccountName', 'badPwdCount', 'badPasswordTime', 'lockoutTime']
+
+        results = []
+        for dc_ip, conn in zip(self._all_dc_ips, self._connections):
+            if not conn:
+                continue
+
+            try:
+                conn.search(
+                    self.base_dn,
+                    search_filter,
+                    attributes=attributes,
+                    search_scope=SUBTREE
+                )
+
+                if conn.entries:
+                    entry = conn.entries[0]
+                    bad_pwd_count = entry.badPwdCount.value if entry.badPwdCount.value is not None else 0
+                    bad_pwd_time = entry.badPasswordTime.value if entry.badPasswordTime.value else datetime(1970, 1, 1, tzinfo=timezone.utc)
+                    lockout_time = entry.lockoutTime.value if entry.lockoutTime and entry.lockoutTime.value else datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+                    results.append({
+                        'dc_ip': dc_ip,
+                        'bad_pwd_count': bad_pwd_count,
+                        'bad_pwd_time': bad_pwd_time,
+                        'lockout_time': lockout_time
+                    })
+            except Exception:
+                # If query fails on this DC, skip it
+                continue
+
+        return results
 

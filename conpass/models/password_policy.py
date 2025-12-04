@@ -10,6 +10,12 @@ class PasswordPolicy:
     name: str
     lockout_threshold: int
     lockout_window_seconds: int
+    lockout_duration_seconds: int = 0
+    min_pwd_length: int = 0
+    pwd_history_length: int = 0
+    max_pwd_age_days: int = 0
+    min_pwd_age_days: int = 0
+    complexity_enabled: bool = False
 
     @property
     def allows_spraying(self) -> bool:
@@ -25,5 +31,6 @@ class PasswordPolicy:
         return (
             f"{self.name}: "
             f"Lockout Threshold={self.lockout_threshold}, "
-            f"Lockout Window={self.lockout_window_seconds}s"
+            f"Lockout Window={self.lockout_window_seconds}s, "
+            f"Lockout Duration={self.lockout_duration_seconds}s"
         )

@@ -34,6 +34,7 @@ class User:
         bad_password_time: datetime,
         time_delta: timedelta,
         security_threshold: int,
+        lockout_time: datetime | None = None,
     ):
         # Identity (immutable)
         self.samaccountname = samaccountname
@@ -48,6 +49,7 @@ class User:
         self._lock = threading.RLock()  # Use RLock for reentrant locking
         self._bad_password_count = bad_password_count
         self._bad_password_time = bad_password_time
+        self._lockout_time = lockout_time if lockout_time else datetime(1970, 1, 1, tzinfo=timezone.utc)
         self._tested_passwords: list[str] = []
         self._found_password: str | None = None
         self._status = UserStatus.PENDING
@@ -93,6 +95,31 @@ class User:
             current_time = datetime.now(timezone.utc) - self.time_delta
         return self.get_observation_window_end() <= current_time
 
+    def is_locked_out(self, current_time: datetime | None = None) -> bool:
+        """
+        Check if the account is currently locked out based on lockoutTime and lockoutDuration.
+
+        MUST be called while holding the lock to ensure thread-safety.
+
+        Returns:
+            True if account is locked out, False otherwise
+        """
+        if current_time is None:
+            current_time = datetime.now(timezone.utc) - self.time_delta
+
+        # Check if lockout_time is set (not epoch)
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        if self._lockout_time <= epoch:
+            return False
+
+        # If lockout_duration is 0, account is locked until manual unlock
+        if self.policy.lockout_duration_seconds == 0:
+            return True
+
+        # Check if lockout duration has passed
+        lockout_end = self._lockout_time + timedelta(seconds=self.policy.lockout_duration_seconds)
+        return current_time < lockout_end
+
     def can_test_password(self, password: str) -> tuple[bool, str]:
         """
         Check if a password can be tested for this user.
@@ -104,6 +131,10 @@ class User:
             - can_test: True if password can be tested
             - reason: Human-readable reason if cannot test
         """
+        # Check if account is locked out
+        if self.is_locked_out():
+            return False, "account_locked_out"
+
         # Check if account is restricted (Protected Users, etc.)
         if self._is_restricted:
             return False, "account_restricted"
@@ -192,14 +223,16 @@ class User:
         with self._lock:
             return self._is_restricted
 
-    def update_from_ldap(self, bad_password_count: int, bad_password_time: datetime) -> None:
+    def update_from_ldap(self, bad_password_count: int, bad_password_time: datetime, lockout_time: datetime | None = None) -> None:
         """
-        Update bad password information from DC.
+        Update bad password and lockout information from DC.
 
         MUST be called while holding the lock to ensure thread-safety.
         """
         self._bad_password_count = bad_password_count
         self._bad_password_time = bad_password_time
+        if lockout_time:
+            self._lockout_time = lockout_time
 
     def get_status(self) -> UserStatus:
         """Get current user status (thread-safe read)."""

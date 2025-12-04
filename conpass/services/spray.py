@@ -223,10 +223,22 @@ class SprayOrchestrator:
         table.add_column('Name')
         table.add_column('Lockout Threshold')
         table.add_column('Lockout Window (s)')
+        table.add_column('Lockout Duration (s)')
+        table.add_column('Min Pwd Length')
+        table.add_column('Pwd History')
+        table.add_column('Max Pwd Age (d)')
+        table.add_column('Min Pwd Age (d)')
+        table.add_column('Complexity')
         table.add_row(
             self.default_policy.name,
             str(self.default_policy.lockout_threshold),
-            str(self.default_policy.lockout_window_seconds)
+            str(self.default_policy.lockout_window_seconds),
+            str(self.default_policy.lockout_duration_seconds),
+            str(self.default_policy.min_pwd_length),
+            str(self.default_policy.pwd_history_length),
+            str(self.default_policy.max_pwd_age_days),
+            str(self.default_policy.min_pwd_age_days),
+            "Yes" if self.default_policy.complexity_enabled else "No"
         )
         self.console.print(table)
 
@@ -260,6 +272,12 @@ class SprayOrchestrator:
         table.add_column('Name')
         table.add_column('Lockout Threshold')
         table.add_column('Lockout Window (s)')
+        table.add_column('Lockout Duration (s)')
+        table.add_column('Min Pwd Length')
+        table.add_column('Pwd History')
+        table.add_column('Max Pwd Age (d)')
+        table.add_column('Min Pwd Age (d)')
+        table.add_column('Complexity')
         table.add_column('Nb of enabled users')
 
         # Default policy
@@ -267,6 +285,12 @@ class SprayOrchestrator:
             "Default Domain Policy",
             str(self.default_policy.lockout_threshold),
             str(self.default_policy.lockout_window_seconds),
+            str(self.default_policy.lockout_duration_seconds),
+            str(self.default_policy.min_pwd_length),
+            str(self.default_policy.pwd_history_length),
+            str(self.default_policy.max_pwd_age_days),
+            str(self.default_policy.min_pwd_age_days),
+            "Yes" if self.default_policy.complexity_enabled else "No",
             str(len([u for u in self.users if u.policy.is_default]))
         )
 
@@ -279,6 +303,12 @@ class SprayOrchestrator:
                     pso.name,
                     str(pso.lockout_threshold),
                     str(pso.lockout_window_seconds),
+                    str(pso.lockout_duration_seconds),
+                    str(pso.min_pwd_length),
+                    str(pso.pwd_history_length),
+                    str(pso.max_pwd_age_days),
+                    str(pso.min_pwd_age_days),
+                    "Yes" if pso.complexity_enabled else "No",
                     str(user_count)
                 )
         elif self.policy_service:
