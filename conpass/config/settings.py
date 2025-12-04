@@ -18,6 +18,7 @@ class SprayConfig:
     # Files
     password_file: Path | None = None
     user_file: Path | None = None
+    database_path: Path | None = None
 
     # Spray settings
     user_as_pass: bool = False
@@ -48,6 +49,11 @@ class SprayConfig:
     def is_online_mode(self) -> bool:
         """Check if we have credentials for online LDAP access."""
         return self.manual_lockout_threshold is None
+
+    @property
+    def use_database(self) -> bool:
+        """Check if database tracking is enabled."""
+        return self.database_path is not None
 
     def __post_init__(self):
         """Validate configuration."""

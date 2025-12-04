@@ -18,6 +18,7 @@ from rich.table import Table
 from conpass.config import SprayConfig
 from conpass.core.worker import Worker, WorkItem
 from conpass.models import Credentials, PasswordPolicy, User
+from conpass.services.database import DatabaseService
 from conpass.services.ldap import LdapService
 from conpass.services.policy import PolicyService
 from conpass.services.smb import SmbService
@@ -39,6 +40,7 @@ class SprayOrchestrator:
         # Services
         self.ldap_service: LdapService | None = None
         self.policy_service: PolicyService | None = None
+        self.database_service: DatabaseService | None = None
         self.time_delta = None
         self.dc_host = None
         self.dc_ip = None
@@ -114,6 +116,23 @@ class SprayOrchestrator:
             f"Time difference with '{self.dc_host}' ({self.dc_ip}): "
             f"{self.time_delta.total_seconds()} seconds"
         )
+
+        # Initialize database service if configured
+        if self.config.use_database:
+            if self.config.debug:
+                self.console.print(f"[cyan][DEBUG] Initializing database: {self.config.database_path}[/cyan]")
+            self.database_service = DatabaseService(self.config.database_path, self.config.domain)
+            self.database_service.connect()
+
+            # Display database statistics
+            stats = self.database_service.get_stats()
+            self.console.print(
+                f"[cyan]Database statistics: {stats['total']} tests recorded "
+                f"({stats['successful']} successful, {stats['failed']} failed)[/cyan]"
+            )
+            if stats['successful'] > 0:
+                successful_creds = self.database_service.get_successful_credentials()
+                self.console.print(f"[green]Found {len(successful_creds)} previously successful credentials in database[/green]")
 
         if self.config.is_online_mode:
             if self.config.debug:
@@ -387,6 +406,7 @@ class SprayOrchestrator:
                 online_mode=self.config.is_online_mode,
                 stop_event=self.stop_event,
                 lockout_event=self.lockout_event,
+                database_service=self.database_service,
                 completed_count_ref=(self, 'completed_count', 'completed_lock'),
                 connected_workers_ref=(self, 'connected_workers', 'connected_workers_lock'),
                 debug=self.config.debug
@@ -441,18 +461,38 @@ class SprayOrchestrator:
 
             # Add user-as-pass tests if enabled
             if self.config.user_as_pass:
+                added_tests = 0
+                skipped_tests = 0
                 for user in self.users:
                     if self.stop_event.is_set() or self.lockout_event.is_set():
                         break
 
                     password = user.samaccountname
+
+                    # Skip if already tested in database (but count it as completed)
+                    if self.database_service and self.database_service.is_already_tested(user.samaccountname, password):
+                        skipped_tests += 1
+                        # Increment completed count for already-tested credentials
+                        with self.completed_lock:
+                            self.completed_count += 1
+                        if self.config.debug:
+                            was_successful = self.database_service.was_successful(user.samaccountname, password)
+                            status_str = "SUCCESS" if was_successful else "FAILED"
+                            self.console.print(f"[bright_black]⊘ Skipping {user.samaccountname}/{password} - already tested ({status_str})[/bright_black]")
+                        continue
+
                     work_item = WorkItem(user=user, password=password)
                     self.work_queue.put(work_item)
                     seen_passwords.add(password)
+                    added_tests += 1
 
-                total_tests = len(self.users)
+                # Total = all tests (added + skipped)
+                total_tests = added_tests + skipped_tests
                 progress.update(task, total=total_tests)
-                self.console.print(f"[cyan]Added user-as-pass tests, total tests: {total_tests}[/cyan]")
+                if skipped_tests > 0:
+                    self.console.print(f"[cyan]Added {added_tests} user-as-pass tests, {skipped_tests} already completed (total: {total_tests})[/cyan]")
+                else:
+                    self.console.print(f"[cyan]Added user-as-pass tests, total tests: {total_tests}[/cyan]")
 
             while any(w.is_alive() for w in self.workers):
                 if self.stop_event.is_set() or self.lockout_event.is_set():
@@ -467,23 +507,42 @@ class SprayOrchestrator:
 
                         if new_passwords:
                             # Add new passwords to queue
+                            added_per_password = {}
                             for password in new_passwords:
                                 if self.stop_event.is_set() or self.lockout_event.is_set():
                                     break
 
+                                added_for_this_pwd = 0
+                                skipped_for_this_pwd = 0
                                 for user in self.users:
                                     if self.stop_event.is_set() or self.lockout_event.is_set():
                                         break
 
+                                    # Skip if already tested in database (but count it as completed)
+                                    if self.database_service and self.database_service.is_already_tested(user.samaccountname, password):
+                                        skipped_for_this_pwd += 1
+                                        # Increment completed count for already-tested credentials
+                                        with self.completed_lock:
+                                            self.completed_count += 1
+                                        continue
+
                                     work_item = WorkItem(user=user, password=password)
                                     self.work_queue.put(work_item)
+                                    added_for_this_pwd += 1
 
                                 seen_passwords.add(password)
-                                total_tests += len(self.users)
+                                added_per_password[password] = (added_for_this_pwd, skipped_for_this_pwd)
+                                # Total includes both added and skipped tests
+                                total_tests += added_for_this_pwd + skipped_for_this_pwd
 
                             # Update progress bar with new total
                             progress.update(task, total=total_tests)
-                            self.console.print(f"[cyan]Added {len(new_passwords)} new password(s), total tests: {total_tests}[/cyan]")
+                            total_skipped = sum(skipped for _, skipped in added_per_password.values())
+                            total_added = sum(added for added, _ in added_per_password.values())
+                            if total_skipped > 0:
+                                self.console.print(f"[cyan]Added {len(new_passwords)} new password(s): {total_added} tests queued, {total_skipped} already completed (total: {total_tests})[/cyan]")
+                            else:
+                                self.console.print(f"[cyan]Added {len(new_passwords)} new password(s), total tests: {total_tests}[/cyan]")
                 else:
                     # No password file - check if all work is done
                     if self.work_queue.empty():

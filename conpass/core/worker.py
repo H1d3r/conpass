@@ -10,6 +10,7 @@ from rich.console import Console
 from conpass.core.status import AuthStatus
 from conpass.exceptions import SmbConnectionError, UserLockedOutError
 from conpass.models import User, UserStatus
+from conpass.services.database import DatabaseService
 from conpass.services.ldap import LdapService
 from conpass.services.smb import SmbService
 
@@ -42,6 +43,7 @@ class Worker(threading.Thread):
         online_mode: bool,
         stop_event: threading.Event,
         lockout_event: threading.Event,
+        database_service: DatabaseService | None = None,
         completed_count_ref: tuple = None,
         connected_workers_ref: tuple = None,
         debug: bool = False
@@ -51,6 +53,7 @@ class Worker(threading.Thread):
         self.work_queue = work_queue
         self.ldap_service = ldap_service
         self.smb_service = smb_service
+        self.database_service = database_service
         self.console = console
         self.online_mode = online_mode
         self.stop_event = stop_event
@@ -282,6 +285,14 @@ class Worker(threading.Thread):
             # Mark password as tested
             success = status.is_success
             user.mark_password_tested(password, success, user_status)
+
+            # Record in database if enabled
+            if self.database_service:
+                try:
+                    self.database_service.record_test(user.samaccountname, password, success)
+                except Exception as e:
+                    if self.debug:
+                        self.console.print(f"[red]⚠️  Worker {self.worker_id}: Failed to record test in database: {e}[/red]")
 
             # Display result (while still holding lock to ensure consistent state)
             if success:
