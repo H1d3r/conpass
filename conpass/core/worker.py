@@ -186,6 +186,15 @@ class Worker(threading.Thread):
                         self.work_queue.put(work_item)
                         return
                 # Otherwise, skip this password (already tested, password found, etc.)
+                # Record in database if account is restricted to avoid retesting in future runs
+                if reason == "account_restricted" and self.database_service:
+                    try:
+                        self.database_service.record_test(user.samaccountname, password, False)
+                        if self.debug:
+                            self.console.print(f"[cyan]💾 Worker {self.worker_id}: Recorded restricted account {user.samaccountname}/{password} in DB[/cyan]")
+                    except Exception as e:
+                        if self.debug:
+                            self.console.print(f"[red]⚠️  Worker {self.worker_id}: Failed to record restricted account in database: {e}[/red]")
                 # Increment completed count since we're not retrying this item
                 if self.debug:
                     self.console.print(f"[yellow]⊘ Worker {self.worker_id}: SKIP {user.samaccountname}/{password} (reason: {reason})[/yellow]")
