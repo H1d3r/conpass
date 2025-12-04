@@ -2,7 +2,7 @@ import socket
 import ssl
 from datetime import datetime, timezone
 
-from ldap3 import ALL, NTLM, Connection, Server, SUBTREE, Tls, TLS_CHANNEL_BINDING
+from ldap3 import ALL, NTLM, Connection, Server, SUBTREE, BASE, Tls, TLS_CHANNEL_BINDING
 from ldap3.core.exceptions import LDAPBindError, LDAPSocketReceiveError
 from rich.console import Console
 
@@ -217,7 +217,19 @@ class LdapService:
             'minPwdLength', 'pwdHistoryLength', 'maxPwdAge', 'minPwdAge', 'pwdProperties'
         ]
 
-        conn.search(self.base_dn, search_filter, attributes=attributes)
+        conn.search(self.base_dn, search_filter, search_scope=BASE, attributes=attributes)
+
+        if not conn.entries:
+            # Reconstruct domain name from base_dn for error message
+            domain_name = '.'.join([part.split('=')[1] for part in self.base_dn.split(',') if part.startswith('dc=')])
+            raise LdapConnectionError(
+                f"Could not find domain object at '{self.base_dn}'. "
+                f"This usually means:\n"
+                f"  - The domain name provided (-d {domain_name}) is incorrect\n"
+                f"  - Your credentials belong to a different domain\n"
+                f"  - You don't have permission to read the domain object"
+            )
+
         entry = conn.entries[0]
 
         lockout_threshold = entry.lockoutThreshold.value if entry.lockoutThreshold else 0
